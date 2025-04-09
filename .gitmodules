@@ -1,3 +1,5 @@
 [submodule "private-repo"]
 	path = private
 	url = https://github.com/gabiteodoru/liveaudio-private.git
+[submodule "private"]
+	branch = main
