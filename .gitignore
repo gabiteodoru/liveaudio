@@ -30,6 +30,3 @@ ENV/
 .vscode/
 *.swp
 *.swo
-
-# Private directory (for our private submodule)
-private/
