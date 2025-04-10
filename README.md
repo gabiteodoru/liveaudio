@@ -14,9 +14,21 @@ Currently, LiveAudio implements:
 
 ## Installation
 
+# LiveAudio
+
+A real-time implementation of librosa pyin for live audio streaming.
+
+## Installation
+
+You can install LiveAudio directly from PyPI:
+
 ```bash
-# Not yet available on PyPI
-# Clone the repository for now
+pip install liveaudio
+```
+
+Alternatively, you can install from the source:
+
+```bash
 git clone https://github.com/gabiteodoru/liveaudio.git
 cd liveaudio
 pip install -e .
@@ -83,42 +95,56 @@ buffer = CircularBuffer(
 # Push new audio frames
 buffer.push(new_audio_frame)  # Must be a 1D numpy array of size hopSize
 
-# Get the most recent frames
-frames = buffer.getFrames(numFrames=4)  # Returns a (numFrames, hopSize) array
+# Once the buffer is full (in this case, after 16 pushes), get the most recent frames
+if buffer.full:
+	frame = buffer.get()  # returns the full frame
 ```
 
 ## Usage Examples
 
 ### Basic Pitch Tracking
 
+## Usage
+
+Here's a basic example showing how to use LiveAudio for real-time pitch detection:
+
 ```python
+from liveaudio.realtimePyin import LivePyin
+from liveaudio.CircularBuffer import CircularBuffer
+import sounddevice as sd
 import numpy as np
-from liveaudio import LivePyin, CircularBuffer
 
-# Initialize components
-sr = 44100  # Sample rate
-frame_size = 2048
-hop_size = 512
+# Initialize the LivePyin object
+sample_rate = 44100  # Your audio device sample rate
+fmin, fmax = 80, 500  # Frequency range to detect
+frame_size, hop_size = 4096, 1024
 
-pyin = LivePyin(fmin=65.0, fmax=1000.0, sr=sr, frameLength=frame_size, hopLength=hop_size)
-buffer = CircularBuffer(sz=frame_size, hopSize=hop_size)
+lpyin = LivePyin(fmin, fmax, sr=sample_rate, frame_length=frame_size,  
+                hop_length=hop_size)
 
-# In a real-time audio processing loop:
-def process_audio_callback(new_audio_chunk):
-    # Add new audio to the buffer
-    buffer.push(new_audio_chunk)
-    
-    # Get the latest complete frame
-    latest_frame = buffer.getFrames(numFrames=1)[0]
-    
-    # Estimate pitch
-    f0, is_voiced, confidence = pyin.step(latest_frame)
-    
-    if is_voiced:
-        print(f"Detected pitch: {f0:.1f} Hz (confidence: {confidence:.2f})")
-    else:
-        print("No pitch detected")
+# Create a circular buffer
+cb = CircularBuffer(frame_size, hop_size)
+
+# Set up the audio callback
+def audioCallback(indata, frames, timeInput, status):
+    x = indata if indata.ndim==1 else indata.mean(1)
+    cb.push(x)
+    if cb.full:
+        y = cb.get()
+        f0, voiced_flag, voiced_prob = lpyin.step(y)
+        print(f'Frequency: {f0:.2f}Hz, Voiced: {voiced_flag}, Probability: {voiced_prob:.2f}')
+
+# Start the stream
+with sd.InputStream(samplerate=sample_rate,
+                  blocksize=hop_size,
+                  channels=1, 
+                  callback=audioCallback):
+    print("Audio processing started...")
+    # Keep the stream running
+    input("Press Enter to stop...")
 ```
+
+A [full working example](https://github.com/gabiteodoru/liveaudio/blob/main/demo.py) with device selection and more options is available in the [repository](https://github.com/gabiteodoru/liveaudio).
 
 ## Future Plans
 

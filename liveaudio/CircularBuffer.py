@@ -1,44 +1,5 @@
 import numpy as np
-import numba as nb
 from threading import Lock
-
-# Numba-optimized functions for the hot path
-@nb.jit(nopython=True, cache=True)
-def _push_data(buffer, data, position, sz, hopSize):
-    """
-    Optimized function to push data into the circular buffer.
-    
-    Args:
-        buffer: The underlying numpy buffer
-        data: Input data array (must be 1D with size == hopSize)
-        position: Current write position in the buffer
-        sz: Total buffer size
-        hopSize: Size of data chunks
-        
-    Returns:
-        New position after writing
-    """
-    start_idx = position
-    end_idx = start_idx + hopSize
-    
-    # Fast path for non-wrapping case
-    if end_idx <= sz:
-        buffer[start_idx:end_idx] = data
-    else:
-        # Handle wrap-around
-        first_part = sz - start_idx
-        buffer[start_idx:] = data[:first_part]
-        buffer[:hopSize-first_part] = data[first_part:]
-    
-    return (position + hopSize) % sz
-
-# This helper is used outside of Numba to calculate the position of the oldest frame
-def _calculate_oldest_frame_position(position, sz, hopSize, numFrames):
-    """Calculate the start position of the oldest frame in the buffer"""
-    # The buffer holds 'numFrames' frames total
-    # The 'position' points to the start of where the next frame would be written
-    # So the oldest frame starts at the position that would be overwritten next
-    return position
 
 class CircularBuffer:
     def __init__(self, sz, hopSize, threadSafe=True):
@@ -54,6 +15,7 @@ class CircularBuffer:
         self.sz = sz
         self.hopSize = hopSize
         self.numFrames = sz // hopSize
+        self.full = False
         
         # Create buffer for data storage
         self.buffer = np.zeros(sz, dtype=np.float32)
@@ -69,11 +31,6 @@ class CircularBuffer:
         if threadSafe:
             self._lock = Lock()
 
-        # Force Numba compilation on initialization
-        _dummy_buffer = np.zeros(8, dtype=np.float32)
-        _dummy_data = np.zeros(4, dtype=np.float32)
-        _ = _push_data(_dummy_buffer, _dummy_data, 0, 8, 4)
-    
     def push(self, data):
         """
         Push a chunk of data into the circular buffer.
@@ -103,8 +60,11 @@ class CircularBuffer:
     
     def _pushImpl(self, data):
         """Internal implementation of the push operation"""
-        # Let Numba handle the efficient data copying
-        self.position = _push_data(self.buffer, data, self.position, self.sz, self.hopSize)
+        self.buffer[self.position:self.position+self.hopSize] = data
+        self.position = self.position + self.hopSize
+        if self.position >= self.sz:
+            self.position = 0
+            self.full = True
     
     def getFrames(self, numFrames=None):
         """
@@ -136,8 +96,7 @@ class CircularBuffer:
         This will return a view when possible (when frames don't wrap around buffer)
         and only create a copy when necessary.
         """
-        # Calculate position of oldest frame we want to retrieve
-        oldest_frame_pos = _calculate_oldest_frame_position(self.position, self.sz, self.hopSize, numFrames) 
+        oldest_frame_pos = self.position
         
         # Create result array
         result = np.empty((numFrames, self.hopSize), dtype=np.float32)
@@ -206,16 +165,35 @@ class CircularBuffer:
         """Return buffer length"""
         return self.sz
     
-def _precompile_numba_functions():
-    """Force compilation of all Numba functions to avoid first-call delay."""
-    # Create small test arrays
-    test_buffer = np.zeros(16, dtype=np.float32)
-    test_data = np.zeros(4, dtype=np.float32)
-    
-    # Force compilation of _push_data
-    _ = _push_data(test_buffer, test_data, 0, 16, 4)
-    
-    print("Numba functions pre-compiled successfully")
-
-# Call this function at module import time
-_precompile_numba_functions()
+    def get(self):
+        """
+        Get all buffered data as a single contiguous array in chronological order.
+        Always returns a contiguous copy for consistent Numba performance.
+        
+        Returns:
+            A 1D numpy array containing all valid data in the buffer
+        """
+        if self._threadSafe:
+            with self._lock:
+                return self._getImpl()
+        else:
+            return self._getImpl()
+            
+    def _getImpl(self):
+        """Implementation of the get operation"""
+        # If buffer isn't full yet, only return data that's been pushed
+        if not self.full:
+            return self.buffer[:self.position].copy()
+        
+        # Data wraps around the end of the buffer
+        if self.position == 0:
+            return self.buffer.copy()
+        
+        # Create a new array and copy both segments
+        result = np.empty(self.sz, dtype=np.float32)
+        # Copy data from position to end
+        result[:self.sz-self.position] = self.buffer[self.position:]
+        # Copy data from beginning to position
+        result[self.sz-self.position:] = self.buffer[:self.position]
+        
+        return result    

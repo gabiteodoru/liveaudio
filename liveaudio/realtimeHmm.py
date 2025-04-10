@@ -6,52 +6,41 @@ import numpy as np
 Fast, forward-only Viterbi
 Includes versions optimized for sparseness and Toeplitz / Block-Topelitz structure
 Both pure max-product, as well as past-sum-product+present-max
+Computation is half-staggered i.e. 
+  first apply output distribution, then apply transition to prepare for next time step
 '''
 
 @numba.jit(nopython=True, cache=True)
 def onlineViterbiState(value: np.ndarray, log_prob: np.ndarray, log_trans: np.ndarray):
-    value += log_prob
+    value = value+log_prob
     result = np.argmax(value)
     trans_out = value[:, np.newaxis] + log_trans
     max_vals = np.zeros(trans_out.shape[1])
-    for i in range(trans_out.shape[1]):
-        max_vals[i] = np.max(trans_out[:, i])
-    return max_vals, result
+    for j in range(trans_out.shape[1]):
+        max_vals[j] = np.max(trans_out[:, j])
+    return max_vals, result, value
 
 @numba.jit(nopython=True, cache=True, parallel=True)
 def onlineViterbiStateOpt(value: np.ndarray, log_prob: np.ndarray, log_trans_row: np.ndarray):
-    # Update state values with current observation probabilities
-    value += log_prob
-    
-    # Find the most likely state
+    value = value+log_prob
     result = np.argmax(value)
-    
-    # Get the half-width of our transition window
+
     halfWidth = (len(log_trans_row) - 1) // 2
-    
-    # Prepare the output values
     n_states = len(value)
     max_vals = np.zeros(n_states)
     
     # For each destination state - use parallel range
-    for i in numba.prange(n_states):
-        # Determine the range of source states that can transition to state i
-        start_idx = max(0, i - halfWidth)
-        end_idx = min(n_states, i + halfWidth + 1)
-        
-        # Determine where in the transition pattern to start
-        trans_offset = halfWidth - i + start_idx
-        
-        # Initialize with an extremely low value
+    for j in numba.prange(n_states):
+        # Determine the range of source states that can transition to state j
+        start_idx = max(0, j - halfWidth)
+        end_idx = min(n_states, j + halfWidth + 1)
+
         curr_max = -np.inf
-        
-        # Find the maximum transition value to state i
-        for j_idx, j in enumerate(range(start_idx, end_idx)):
-            trans_val = value[j] + log_trans_row[trans_offset + j_idx]
+        for i in range(start_idx, end_idx):
+            trans_offset = halfWidth + j - i
+            trans_val = value[i] + log_trans_row[trans_offset]
             curr_max = max(curr_max, trans_val)
-        
-        max_vals[i] = curr_max
-    
+        max_vals[j] = curr_max
     return max_vals, result
 
 
@@ -93,7 +82,7 @@ def blockViterbiStateOpt(value: np.ndarray, log_prob: np.ndarray,
         For indices 0 to n1-1 (group 0): contains local indices (0-based) in group 1.
         For indices n1 to n1+n2-1 (group 1): contains local indices (0-based) in group 0.
         Used to determine where to center the band for between-group transitions.
-        The index into this array is the destination state (i), and the value 
+        The index into this array is the destination state (j), and the value 
         retrieved is the corresponding source state in the other group that serves
         as the center of the transition band.
         
@@ -118,7 +107,7 @@ def blockViterbiStateOpt(value: np.ndarray, log_prob: np.ndarray,
       in each group is the same, but at different resolutions.
     """    
     # Update state values with current observation probabilities
-    value += log_prob
+    value = value+log_prob
     
     # Find the most likely state
     result = np.argmax(value)
@@ -137,65 +126,65 @@ def blockViterbiStateOpt(value: np.ndarray, log_prob: np.ndarray,
     max_vals = np.zeros(n_states)
     
     # For each destination state - use parallel range
-    for i in numba.prange(n_states):
+    for j in numba.prange(n_states):
         # Initialize with an extremely low value
         curr_max = -np.inf
         
         # Get corresponding state in the other group
-        corresponding_j = correspondence[i]
+        corresponding_i = correspondence[j]
         
-        if i < n1:  # Destination is in group 0
+        if j < n1:  # Destination is in group 0
             # Consider transitions from group 0 (via matrix 00)
-            start_idx_0 = max(0, i - halfWidth_00)
-            end_idx_0 = min(n1, i + halfWidth_00 + 1)
+            start_idx_0 = max(0, j - halfWidth_00)
+            end_idx_0 = min(n1, j + halfWidth_00 + 1)
             
-            # Find max transition from group 0 to i
-            for j in range(start_idx_0, end_idx_0):
-                trans_offset = halfWidth_00 + (j - i)
-                trans_val = value[j] + log_trans_00[trans_offset]
+            # Find max transition from group 0 to j
+            for i in range(start_idx_0, end_idx_0):
+                trans_offset = halfWidth_00 + j - i
+                trans_val = value[i] + log_trans_00[trans_offset]
                 curr_max = max(curr_max, trans_val)
                 
             # Consider transitions from group 1 (via matrix 10)
             # Center the band around this corresponding state
-            start_idx_1 = max(0, corresponding_j - halfWidth_10)
-            end_idx_1 = min(n2, corresponding_j + halfWidth_10 + 1)
+            start_idx_1 = max(0, corresponding_i - halfWidth_10)
+            end_idx_1 = min(n2, corresponding_i + halfWidth_10 + 1)
             
-            # Find max transition from group 1 to i
-            for j in range(start_idx_1, end_idx_1):
-                # Adjust j to global index (add n1)
-                j_global = j + n1
-                trans_offset = halfWidth_10 + (j - corresponding_j)
-                trans_val = value[j_global] + log_trans_10[trans_offset]
+            # Find max transition from group 1 to j
+            for i in range(start_idx_1, end_idx_1):
+                # Adjust i to global index (add n1)
+                i_global = i + n1
+                trans_offset = halfWidth_10 + corresponding_i - i
+                trans_val = value[i_global] + log_trans_10[trans_offset]
                 curr_max = max(curr_max, trans_val)
                 
         else:  # Destination is in group 1
-            # Adjust i to local index in group 1
-            i_local = i - n1
+            # Adjust j to local index in group 1
+            j_local = j - n1
             
             # Consider transitions from group 0 (via matrix 01)
             # Center the band around this corresponding state
-            start_idx_0 = max(0, corresponding_j - halfWidth_01)
-            end_idx_0 = min(n1, corresponding_j + halfWidth_01 + 1)
+            start_idx_0 = max(0, corresponding_i - halfWidth_01)
+            end_idx_0 = min(n1, corresponding_i + halfWidth_01 + 1)
             
-            # Find max transition from group 0 to i
-            for j in range(start_idx_0, end_idx_0):
-                trans_offset = halfWidth_01 + (j - corresponding_j)
-                trans_val = value[j] + log_trans_01[trans_offset]
+            # Find max transition from group 0 to j
+            for i in range(start_idx_0, end_idx_0):
+                trans_offset = halfWidth_01 + corresponding_i - i
+                trans_val = value[i] + log_trans_01[trans_offset]
                 curr_max = max(curr_max, trans_val)
                 
             # Consider transitions from group 1 (via matrix 11)
-            start_idx_1 = max(0, i_local - halfWidth_11)
-            end_idx_1 = min(n2, i_local + halfWidth_11 + 1)
+            start_idx_1 = max(0, j_local - halfWidth_11)
+            end_idx_1 = min(n2, j_local + halfWidth_11 + 1)
             
-            # Find max transition from group 1 to i
-            for j in range(start_idx_1, end_idx_1):
-                # Adjust j to global index (add n1)
-                j_global = j + n1
-                trans_offset = halfWidth_11 + (j - i_local)
-                trans_val = value[j_global] + log_trans_11[trans_offset]
+            # Find max transition from group 1 to j
+            for i in range(start_idx_1, end_idx_1):
+                # Adjust i to global index (add n1)
+                i_global = i + n1
+                trans_offset = halfWidth_11 + j_local - i
+                trans_val = value[i_global] + log_trans_11[trans_offset]
                 curr_max = max(curr_max, trans_val)
         
-        max_vals[i] = curr_max
+        max_vals[j] = curr_max
     
     return max_vals, result
 
