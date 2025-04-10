@@ -140,7 +140,7 @@ with sd.InputStream(samplerate=sample_rate,
                   channels=1, 
                   callback=audioCallback):
     print("Audio processing started. Sing into your microphone to test. Press Ctrl+C to stop")
-	while True: time.sleep(0.1) # Keep the stream running
+    while True: time.sleep(0.1) # Keep the stream running
 ```
 
 A [full working example](https://github.com/gabiteodoru/liveaudio/blob/main/demo.py) with device selection and more options is available in the [repository](https://github.com/gabiteodoru/liveaudio).
