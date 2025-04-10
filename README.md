@@ -1,6 +1,6 @@
 # LiveAudio
 
-A real-time audio processing library built to provide efficient, streaming implementations of popular audio analysis algorithms.
+A real-time audio processing library built to provide efficient, streaming implementations of popular audio analysis algorithms, including real-time pitch tracking optimized for live streaming.
 
 ## Overview
 
@@ -55,8 +55,8 @@ lpyin = LivePyin(
     fmin=65.0,      # Minimum frequency in Hz
     fmax=2093.0,    # Maximum frequency in Hz
     sr=44100,       # Sample rate
-    frameLength=2048,  # Frame size
-    hopLength=512   # Hop size
+    frame_length=2048,  # Frame size
+    hop_length=512   # Hop size
 )
 
 # Process frames one by one
