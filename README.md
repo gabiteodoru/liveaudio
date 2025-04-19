@@ -2,6 +2,11 @@
 
 A real-time audio processing library built to provide efficient, implementations of popular audio analysis streaming algorithms, including real-time pitch tracking and pitch shifting optimized for live processing.
 
+[![PyPI version](https://badge.fury.io/py/liveaudio.svg)](https://badge.fury.io/py/liveaudio)
+[![GitHub](https://img.shields.io/github/license/gabiteodoru/liveaudio)](https://github.com/gabiteodoru/liveaudio)
+
+**GitHub**: [https://github.com/gabiteodoru/liveaudio](https://github.com/gabiteodoru/liveaudio)
+
 ## Overview
 
 LiveAudio is a Python package designed for real-time audio signal processing applications. It offers optimized implementations of streaming algorithms that traditionally require full audio files, making them suitable for live audio processing. The library is built with performance in mind, using Numba for JIT compilation and optimized algorithms suitable for real-time applications.
@@ -185,7 +190,7 @@ print(f"Original audio max amplitude: {np.max(np.abs(audio)):.2f}")
 print(f"Normalized audio max amplitude: {np.max(np.abs(normalized_audio)):.2f}")
 ```
 
-![LinearVolumeNormalizer Demo](images/normalizer_demo.png)
+![LinearVolumeNormalizer Demo](https://raw.githubusercontent.com/gabiteodoru/liveaudio/main/images/normalizer_demo.png)
 
 ### CircularBuffer
 
