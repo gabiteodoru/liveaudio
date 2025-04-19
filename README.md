@@ -1,22 +1,19 @@
 # LiveAudio
 
-A real-time audio processing library built to provide efficient, streaming implementations of popular audio analysis algorithms, including real-time pitch tracking optimized for live streaming.
+A real-time audio processing library built to provide efficient, implementations of popular audio analysis streaming algorithms, including real-time pitch tracking and pitch shifting optimized for live processing.
 
 ## Overview
 
-LiveAudio is a Python package designed for real-time audio signal processing applications. It offers optimized, streaming implementations of audio algorithms that traditionally require full audio files, making them suitable for live audio processing. The library is built with performance in mind, using Numba for JIT compilation and optimized algorithms suitable for real-time applications.
+LiveAudio is a Python package designed for real-time audio signal processing applications. It offers optimized implementations of streaming algorithms that traditionally require full audio files, making them suitable for live audio processing. The library is built with performance in mind, using Numba for JIT compilation and optimized algorithms suitable for real-time applications.
 
 Currently, LiveAudio implements:
 
 - **LivePyin**: A real-time implementation of the probabilistic YIN (pYIN) algorithm for pitch detection
-- **Real-time HMM**: Optimized Viterbi algorithm implementations for Hidden Markov Models in streaming contexts
-- **CircularBuffer**: A high-performance circular buffer for managing audio frames in real-time
-
-## Installation
-
-# LiveAudio
-
-A real-time implementation of librosa pyin for live audio streaming.
+- **PitchShiftVocoder**: A real-time pitch shifting vocoder
+- **LinearVolumeNormalizer**: A real-time volume normalizer that adjusts volume smoothly, as vocoder output may exceed input range
+- **Real-time HMM**: Optimized Viterbi algorithm implementations for Hidden Markov Models for use with streaming algorithms
+- **CircularBuffer**: A high-performance circular buffer for managing audio frames in real-time as input to Pyin and the Vocoder
+- **OACBuffer**: A high-performance Overlap-Add Circular buffer for managing the output of the vocoder
 
 ## Installation
 
@@ -41,42 +38,154 @@ pip install -e .
 - scipy
 - librosa (>= 0.11.0)
 
-## Components
+## Demos and sample code
 
-### LivePyin
-
-A real-time implementation of the probabilistic YIN (pYIN) algorithm for fundamental frequency (F0) estimation. Unlike the standard pYIN implementation in librosa, LivePyin is designed for frame-by-frame processing, making it suitable for real-time applications.
+### Live pitch-tracking with LivePyin
 
 ```python
-from liveaudio import LivePyin
+from liveaudio.LivePyin import LivePyin
+from liveaudio.buffers import CircularBuffer
+from liveaudio.utils import formatTimit, get_interactive_input_device
+import time, librosa, numpy as np, sounddevice as sd
 
-# Initialize the LivePyin instance
-lpyin = LivePyin(
-    fmin=65.0,      # Minimum frequency in Hz
-    fmax=2093.0,    # Maximum frequency in Hz
-    sr=44100,       # Sample rate
-    frame_length=2048,  # Frame size
-    hop_length=512   # Hop size
-)
+input_device, sample_rate, input_channels = get_interactive_input_device()
+fmin, fmax = librosa.note_to_hz('C2'), librosa.note_to_hz('C5')
+frame_length, hop = 4096, 1024
+dtype = np.float64 # I'm not seeing a speed hit by using 64-bit when audio stream input is 32-bit (you can also tell the stream the type you'd like, but it doesn't support 64bit)
 
-# Process frames one by one
-for frame in audio_frames:
-    f0, voiced_flag, voiced_prob = lpyin.step(frame)
-    # f0: Estimated fundamental frequency
-    # voiced_flag: Boolean indicating if the frame is voiced
-    # voiced_prob: Probability of the frame being voiced
+t0 = time.perf_counter()
+lpyin = LivePyin(fmin, fmax, sr=sample_rate, frame_length=frame_length,  
+             hop_length=hop, dtype=dtype,
+             n_bins_per_semitone=20, max_semitones_per_frame=12,
+             )
+print('Class instantiated and code compiled in:', formatTimit(time.perf_counter()-t0))
+print('Callback needs to run in: ',formatTimit(hop/sample_rate))
+
+def audioCallback(indata, frames, timeInput, status):
+    t0 = time.perf_counter()
+    if status: print(status)
+    x = indata if indata.ndim==1 else indata.mean(1)
+    cb.push(x)
+    if cb.full:
+        y = cb.get()
+        f0,voiced_flag,voiced_prob = lpyin.step(y.astype(dtype))
+        print(f'Amplitude: {np.std(y):.3f}, {f0:.2f}Hz, {voiced_flag=}, {voiced_prob=:.2f}, cpu_time: ',formatTimit(time.perf_counter() - t0))
+        
+cb = CircularBuffer(frame_length, hop) 
+for i in range(3): lpyin.warmup_and_reset() # warmup
+time.sleep(0.1)
+
+try:
+    with sd.InputStream(device=input_device,
+                  samplerate=sample_rate,
+                  blocksize=hop,
+                  channels=input_channels, 
+                  callback=audioCallback,
+                  latency = .015,
+                  ):
+        print("Audio routing started. Start singing now! Press Ctrl+C to stop")
+        print("* Please remember that it won't work if your mic is off! (look at amplitude!, press mic-off key)")
+        while True: time.sleep(0.1) # Keep the stream running
+except KeyboardInterrupt:
+    print("* Stopped by user")
+except Exception as e:
+    print(f"Error: {e}")
 ```
 
-### Real-time HMM
+This [demo](https://github.com/gabiteodoru/liveaudio/blob/main/demoPyin.py) is available in the [repository](https://github.com/gabiteodoru/liveaudio).
 
-Efficient implementations of the Viterbi algorithm optimized for real-time processing with Hidden Markov Models. The module provides several variants:
+### PitchShiftVocoder demo running in batch mode
 
-- `onlineViterbiState`: Basic online Viterbi algorithm
-- `onlineViterbiStateOpt`: Optimized Viterbi for sparse transition matrices
-- `blockViterbiStateOpt`: Block-structured Viterbi algorithm for specialized transition matrices
-- `sumProductViterbi`: Sum-product variant of the Viterbi algorithm
+```python
+from liveaudio.PitchShiftVocoder import PitchShiftVocoder
+from liveaudio.LinearVolumeNormalizer import LinearVolumeNormalizer
+from liveaudio.utils import get_interactive_output_device, formatTimit
+import numpy as np
+import librosa
+import matplotlib.pyplot as plt
+import sounddevice as sd
+import time
 
-These implementations are particularly useful for pitch tracking and other sequential estimation problems in audio processing.
+# Parameters
+sr = 44100  # Sample rate
+frSz = 4096  # Frame size
+hop = 1024    # Hop size
+duration = 2.0  # Duration in seconds
+f0 = 440.0  # Frequency of the sine wave
+output_device, sample_rate, input_channels = get_interactive_output_device()
+play = lambda x: sd.play(x, sr, device=output_device)
+def plot(x):
+    plt.plot(x);plt.show()
+
+# Generate sine wave
+t = np.arange(0, duration, 1.0/sr)
+input_signal = np.sin(2 * np.pi * f0 * t).astype(np.float64)
+# The first frame will be all zeros, but that can be initialized like that when running realtime as well
+frames = librosa.util.frame(np.concatenate((np.zeros(hop),input_signal)), frame_length=frSz+hop, hop_length=hop).T
+
+st = 2**(1/12)
+ratios = st**np.concatenate((np.linspace(0, -3, 30), np.linspace(-3, 3, 60)))
+audioOut = np.array([])
+voc = PitchShiftVocoder(sr, frSz, hop); voc.step(frames[1], .9); voc.step(frames[2], 1.1); # warmup
+voc = PitchShiftVocoder(sr, frSz, hop)
+lvn = LinearVolumeNormalizer()
+for r, f in zip(ratios, frames):
+    t0 = time.perf_counter()
+    audio = lvn.normalize(voc.step(f, r))
+    print(formatTimit(time.perf_counter()-t0))
+    audioOut = np.concatenate((audioOut,audio))
+plt.plot(audioOut);plt.show()
+play(audioOut)
+```
+
+This [demo](https://github.com/gabiteodoru/liveaudio/blob/main/demoVocoder.py) is available in the [repository](https://github.com/gabiteodoru/liveaudio).
+
+### LinearVolumeNormalizer
+
+```python
+from liveaudio.LinearVolumeNormalizer import LinearVolumeNormalizer
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Parameters
+sr = 44100  # Sample rate
+duration = 0.5  # Duration in seconds
+f0 = 440.0  # Frequency of the sine wave
+
+# Generate sine wave with increasing amplitude from 0.5 to 2.0
+t = np.arange(0, duration, 1.0/sr)
+amplitude = np.linspace(0.5, 2.0, len(t))  # Increasing amplitude
+audio = amplitude * np.sin(2 * np.pi * f0 * t)
+
+# Create a normalizer and process audio
+normalizer = LinearVolumeNormalizer(limit=0.95)
+normalized_audio = normalizer.normalize(audio)
+
+# Plot original and normalized audio
+plt.figure(figsize=(10, 6))
+
+plt.subplot(2, 1, 1)
+plt.title("Original Audio (Amplitude: 0.5 to 2.0)")
+plt.plot(t, audio)
+plt.ylabel("Amplitude")
+plt.grid(True)
+
+plt.subplot(2, 1, 2)
+plt.title("Normalized Audio (Limit: 0.95)")
+plt.plot(t, normalized_audio)
+plt.xlabel("Time (s)")
+plt.ylabel("Amplitude")
+plt.grid(True)
+
+plt.tight_layout()
+plt.show() # plt.savefig('normalizer_demo.png', dpi=150)
+
+# Print max amplitudes
+print(f"Original audio max amplitude: {np.max(np.abs(audio)):.2f}")
+print(f"Normalized audio max amplitude: {np.max(np.abs(normalized_audio)):.2f}")
+```
+
+![LinearVolumeNormalizer Demo](images/normalizer_demo.png)
 
 ### CircularBuffer
 
@@ -100,72 +209,49 @@ if buffer.full:
 	frame = buffer.get()  # returns the full frame
 ```
 
-## Usage Examples
+### OACBuffer
 
-### Basic Pitch Tracking
-
-## Usage
-
-Here's a basic example showing how to use LiveAudio for real-time pitch detection:
+A high-performance Overlap-Add Circular buffer for managing the output of the vocoder
 
 ```python
-from liveaudio.realtimePyin import LivePyin
-from liveaudio.CircularBuffer import CircularBuffer
-from liveaudio.utils import formatTimit, get_interactive_input_device
-import time, librosa, numpy as np, sounddevice as sd
+from liveaudio.buffers import OACBuffer
+import numpy as np
+import scipy.signal
 
-input_device, sample_rate, input_channels = get_interactive_input_device()
-fmin, fmax = librosa.note_to_hz('C2'), librosa.note_to_hz('C5')
-frame_size, hop_size = 4096, 1024
-dtype = np.float64 # I'm not seeing a speed hit by using 64-bit when audio stream input is 32-bit (you can also tell the stream the type you'd like, but it doesn't support 64bit)
+# Create an OACBuffer (size must be a multiple of hop size)
+frameSz, hopSz = 2048, 512
+window = scipy.signal.windows.hann(frameSz) * (2/3) ** .5 # Energy preserving Hann window at 75% overlap
+oac_buffer = OACBuffer(
+    size=frameSz,    # Frame size
+    hop=hopSz,       # Hop size
+    window=window    # Optional window function
+)
 
-t0 = time.perf_counter()
-lpyin = LivePyin(fmin, fmax, sr=sample_rate, frame_length=frame_size,  
-             hop_length=hop_size, dtype=dtype,
-             n_bins_per_semitone=20, max_semitones_per_frame=12,
-             )
-print('Class instantiated and code compiled in:', formatTimit(time.perf_counter()-t0))
-print('Callback needs to run in: ',formatTimit(hop_size/sample_rate))
+# Create sample frames (in real usage, these would come from audio processing)
+frames = [np.random.rand(frameSz) for _ in range(5)]
 
-def audioCallback(indata, frames, timeInput, status):
-    t0 = time.perf_counter()
-    if status: print(status)
-    x = indata if indata.ndim==1 else indata.mean(1)
-    cb.push(x)
-    if cb.full:
-        y = cb.get()
-        f0,voiced_flag,voiced_prob = lpyin.step(y.astype(dtype))
-        print(f'Amplitude: {np.std(y):.3f}, {f0:.2f}Hz, {voiced_flag=}, {voiced_prob=:.2f}, cpu_time: ',formatTimit(time.perf_counter() - t0))
-        
-cb = CircularBuffer(frame_size, hop_size) 
-for i in range(3): lpyin.warmup_and_reset() # warmup
-time.sleep(0.1)
-
-try:
-    with sd.InputStream(device=input_device,
-                  samplerate=sample_rate,
-                  blocksize=hop_size,
-                  channels=input_channels, 
-                  callback=audioCallback,
-                  latency = .015,
-                  ):
-        print("Audio routing started. Start singing now! Press Ctrl+C to stop")
-        print("* Please remember that it won't work if your mic is off! (look at amplitude!, press mic-off key)")
-        while True: time.sleep(0.1) # Keep the stream running
-except KeyboardInterrupt:
-    print("* Stopped by user")
-except Exception as e:
-    print(f"Error: {e}")
+# Process frames through the OACBuffer
+for frame in frames:
+    output_hop = oac_buffer.pushGet(frame)  # Returns a hop-sized chunk
+    # Each output_hop contains the overlapped sum of windowed frame segments
+    print(f"Output hop shape: {output_hop.shape}")  # Should be (hopSz,)
 ```
 
-A [full working example](https://github.com/gabiteodoru/liveaudio/blob/main/demo.py) with device selection and more options is available in the [repository](https://github.com/gabiteodoru/liveaudio).
+### Real-time HMM
+
+Efficient implementations of the Viterbi algorithm optimized for real-time processing with Hidden Markov Models. The module provides several variants, some of which are still under development:
+
+- `onlineViterbiState`: Basic online Viterbi algorithm
+- `onlineViterbiStateOpt`: Optimized Viterbi for sparse transition matrices
+- `blockViterbiStateOpt`: Block-structured Viterbi algorithm for specialized transition matrices
+- `sumProductViterbi`: Sum-product variant of the Viterbi algorithm
+
+These implementations are particularly useful for pitch tracking and other sequential estimation problems in audio processing.
 
 ## Future Plans
 
-- Live AutoTune algorithm
-- Real-time spectral processing tools
-- More audio effects processing
-- Support for audio I/O through PyAudio or similar libraries
+- Live AutoTune algorithm: LivePyin + PitchShiftVocoder: Thorough testing and tweaking
+- Always happy for contributors if you wanna build something new
 
 ## License
 
@@ -174,4 +260,4 @@ MIT License
 ## Acknowledgments
 
 This package builds upon concepts and algorithms from the [librosa](https://librosa.org/) library, providing real-time compatible implementations. Special thanks to the librosa team for their excellent work in audio signal processing.
-This README was written by Claude.AI . 
+A lot of documentation and some code witten by Claude.AI (sadly we can't vibecode vocoders yet). 

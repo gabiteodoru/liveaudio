@@ -1,20 +1,20 @@
-from liveaudio.realtimePyin import LivePyin
-from liveaudio.CircularBuffer import CircularBuffer
+from liveaudio.LivePyin import LivePyin
+from liveaudio.buffers import CircularBuffer
 from liveaudio.utils import formatTimit, get_interactive_input_device
 import time, librosa, numpy as np, sounddevice as sd
 
 input_device, sample_rate, input_channels = get_interactive_input_device()
 fmin, fmax = librosa.note_to_hz('C2'), librosa.note_to_hz('C5')
-frame_size, hop_size = 4096, 1024
+frame_length, hop = 4096, 1024
 dtype = np.float64 # I'm not seeing a speed hit by using 64-bit when audio stream input is 32-bit (you can also tell the stream the type you'd like, but it doesn't support 64bit)
 
 t0 = time.perf_counter()
-lpyin = LivePyin(fmin, fmax, sr=sample_rate, frame_length=frame_size,  
-             hop_length=hop_size, dtype=dtype,
+lpyin = LivePyin(fmin, fmax, sr=sample_rate, frame_length=frame_length,  
+             hop_length=hop, dtype=dtype,
              n_bins_per_semitone=20, max_semitones_per_frame=12,
              )
 print('Class instantiated and code compiled in:', formatTimit(time.perf_counter()-t0))
-print('Callback needs to run in: ',formatTimit(hop_size/sample_rate))
+print('Callback needs to run in: ',formatTimit(hop/sample_rate))
 
 def audioCallback(indata, frames, timeInput, status):
     t0 = time.perf_counter()
@@ -26,14 +26,14 @@ def audioCallback(indata, frames, timeInput, status):
         f0,voiced_flag,voiced_prob = lpyin.step(y.astype(dtype))
         print(f'Amplitude: {np.std(y):.3f}, {f0:.2f}Hz, {voiced_flag=}, {voiced_prob=:.2f}, cpu_time: ',formatTimit(time.perf_counter() - t0))
         
-cb = CircularBuffer(frame_size, hop_size) 
+cb = CircularBuffer(frame_length, hop) 
 for i in range(3): lpyin.warmup_and_reset() # warmup
 time.sleep(0.1)
 
 try:
     with sd.InputStream(device=input_device,
                   samplerate=sample_rate,
-                  blocksize=hop_size,
+                  blocksize=hop,
                   channels=input_channels, 
                   callback=audioCallback,
                   latency = .015,
