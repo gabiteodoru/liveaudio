@@ -92,7 +92,7 @@ except Exception as e:
     print(f"Error: {e}")
 ```
 
-This [demo](https://github.com/gabiteodoru/liveaudio/blob/main/demoPyin.py) is available in the [repository](https://github.com/gabiteodoru/liveaudio).
+This [demo](https://github.com/gabiteodoru/liveaudio/blob/main/demos/demoPyin.py) is available in the [repository](https://github.com/gabiteodoru/liveaudio).
 
 ### PitchShiftVocoder demo running in batch mode
 
@@ -138,7 +138,7 @@ plt.plot(audioOut);plt.show()
 play(audioOut)
 ```
 
-This [demo](https://github.com/gabiteodoru/liveaudio/blob/main/demoVocoder.py) is available in the [repository](https://github.com/gabiteodoru/liveaudio).
+This [demo](https://github.com/gabiteodoru/liveaudio/blob/main/demos/demoVocoder.py) is available in the [repository](https://github.com/gabiteodoru/liveaudio).
 
 ### LinearVolumeNormalizer
 
