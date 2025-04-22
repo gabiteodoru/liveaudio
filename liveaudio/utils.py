@@ -3,8 +3,21 @@ import sounddevice as sd
 
 def findClosestNote(freqHz):
     '''Function to find the closest note to chromatic scale with A=440'''
-    return 440.0 * 2^(math.floor(.5+math.log2(freqHz/440.0) * 12) / 12)
+    return 440.0 * 2**(math.floor(.5+math.log2(freqHz/440.0) * 12) / 12)
 
+def findClosestCMajorNote(freqHz):
+    '''
+    [TODO] Test code:
+    np.round(np.diff(np.log(np.unique(np.round([findClosestCMajorNote(i) for i in range(220,883)],2))))/np.log(st),2)
+    Out[53]: array([2., 1., 2., 2., 1., 2., 2., 2., 1., 2., 2., 1., 2., 2.])
+    '''
+    semiTones = round(12 * math.log2(freqHz/440.0))
+    cMajorOffsets = [0, 2, 4, 5, 7, 9, 11]
+    position = semiTones % 12
+    distances = [min((pos - position) % 12, (position - pos) % 12) for pos in cMajorOffsets]
+    closestOffset = cMajorOffsets[distances.index(min(distances))]
+    adjustment = closestOffset - position
+    return freqHz * 2**(adjustment/12)
 
 def get_interactive_input_device():
     # Find the devices by name
@@ -34,7 +47,7 @@ def get_interactive_output_device():
     input_device = int(input('\nSelect audio output device: '))
 
     sample_rate = int(devices[input_device]['default_samplerate'])
-    input_channels = int(devices[input_device]['max_input_channels'])
+    input_channels = int(devices[input_device]['max_output_channels'])
     
     return input_device, sample_rate, input_channels
 
