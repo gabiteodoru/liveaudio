@@ -45,7 +45,7 @@ class PitchShiftVocoder:
         if hop is None: hop = frSz//4
         assert hop*4 == frSz, "Only implemented for hop*4 == frame size due to window COLA property"
         assert all(isPowerOf2(i) for i in (hop, frSz)), "hop and frame size should be powers of 2 (technically not absolutely necessary, but no good reason I can't think of not to do it)"
-        assert fftSz is None or fftSz == frSz, "Different FFT size not yet implemented"
+        # assert fftSz is None or fftSz == frSz, "Different FFT size not yet implemented"
         if fftSz is None:
             fftSz = frSz
         else:
@@ -77,6 +77,7 @@ class PitchShiftVocoder:
             Time-domain audio frame
         """
         X = librosa.util.phasor(self.phase_acc, mag=R)  # Convert magnitude and phase to complex spectrum
+        X[1::2] = -X[1::2] # fftshift
         x = scipy.fft.irfft(X)  # Inverse FFT to get time domain signal
         if self.fftbuf is not None: x = x[:self.frSz]  # Truncate if zero-padded FFT was used
         return x
@@ -96,6 +97,7 @@ class PitchShiftVocoder:
             spectrum = scipy.fft.rfft(self.fftbuf)
         else:
             spectrum = scipy.fft.rfft(self.window*audio)
+        spectrum[1::2] = -spectrum[1::2] # fftshift
         R = np.abs(spectrum)  # Magnitude spectrum
         phi = np.angle(spectrum)  # Phase spectrum
         return R, phi
@@ -127,7 +129,7 @@ class PitchShiftVocoder:
         assert len(audio) == self.hop + self.frSz, "Input audio size doesn't match that passed in the constructor"
         warpedSz = 2*math.floor(self.frSz*ratio/2+.5)  # Always even sized for better windowing
         pitchUp = warpedSz > self.frSz
-        # pitchDown = warpedSz < self.frSz
+        pitchDown = warpedSz < self.frSz
         noChange = warpedSz == self.frSz
         if noChange: ratio = 1. # if ratio is so close to 1. we can't even add or remove 2 samples, keep it unchanged
         R0, phi0 = self._fft(audio[self.hop:]) # Get magnitude and phase of current frame
@@ -169,8 +171,12 @@ class PitchShiftVocoder:
              # to account for a stretched frame given that we have already advanced by phi0 - phimr
              # in the middle of creating the stretched audio
         else: # For no change or pitch down, synthesis is simpler
-            x = self._makeAudio(R0)[:warpedSz]  # Use current frame, chop off excess for pitch down
-            
+            x = self._makeAudio(R0)
+            if pitchDown:
+                x = x[:warpedSz]  # Use current frame, chop off excess for pitch down
+                newWin = scipy.signal.windows.hann(warpedSz) * (2/3)**.5
+                with np.errstate(divide='ignore', invalid='ignore'): # Handle division by zero in window normalization
+                    x *= np.nan_to_num(newWin/self.window[:warpedSz], nan=((self.frSz-1)/(warpedSz-1))**2)
         if not noChange: # Resample to match target frame size if pitch was changed 
             x = librosa.resample(x, orig_sr=len(x), target_sr=self.frSz)
             
