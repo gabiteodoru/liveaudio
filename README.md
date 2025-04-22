@@ -6,6 +6,7 @@ A real-time audio processing library built to provide efficient, implementations
 [![GitHub](https://img.shields.io/github/license/gabiteodoru/liveaudio)](https://github.com/gabiteodoru/liveaudio)
 
 **GitHub**: [https://github.com/gabiteodoru/liveaudio](https://github.com/gabiteodoru/liveaudio)
+**Medium Article**: [Real-Time Pitch Shifting with a Phase Vocoder: A Complete Implementation Guide](https://medium.com/@gabiteodoru/real-time-pitch-shifting-with-phase-vocoder-a-complete-implementation-guide-3a33c35f5893)
 
 ## Overview
 
